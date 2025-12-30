@@ -3,18 +3,32 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Table, Relationship, Tool } from '@/types/database';
+
+type ExportFormat = 'sql' | 'prisma' | 'typeorm' | 'sequelize' | 'django' | 'graphql' | 'png' | 'jpeg';
 import { Canvas } from '@/components/canvas';
 import { TableCard } from '@/components/TableCard';
 import { CodeEditor } from '@/components/codeeditor';
-import { Plus, Download, ZoomIn, ZoomOut, Minimize2, Hand, Moon, Sun, Database, Trash2, Image as ImageIcon } from 'lucide-react';
+import { useHistory } from '@/hooks/usehistory';
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { autoLayout, gridLayout, hierarchicalLayout } from '@/utils/autoLayout';
+import { exportToSQL, exportToTypeORM, exportToSequelize, exportToDjango, exportToGraphQL, exportToPrisma, downloadFile } from '@/utils/exportes';
+import { importFromSQL, importFromPrisma } from '@/utils/importers';
+import { 
+  Plus, Download, ZoomIn, ZoomOut, Minimize2, Hand, Moon, Sun, Database, Trash2, 
+  Image as ImageIcon, Undo2, Redo2, Layout, Upload, Copy, Scissors, FileText, Grid3x3
+} from 'lucide-react';
 
 const STORAGE_KEY = 'db_designer_state';
+
+type DiagramState = {
+  tables: Table[];
+  relationships: Relationship[];
+  diagramName: string;
+};
 
 export default function Home() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [diagramName, setDiagramName] = useState('Untitled Diagram');
-  const [tables, setTables] = useState<Table[]>([]);
-  const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -29,61 +43,122 @@ export default function Home() {
     y: number;
   } | null>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showLayoutMenu, setShowLayoutMenu] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [editingRelationship, setEditingRelationship] = useState<{
     rel: Relationship;
     x: number;
     y: number;
   } | null>(null);
+  const [selectedTables, setSelectedTables] = useState<Set<string>>(new Set());
+  const [copiedTables, setCopiedTables] = useState<Table[]>([]);
+  const [showGrid, setShowGrid] = useState(true);
+  const [snapToGrid, setSnapToGrid] = useState(true);
 
   const canvasRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Initialize history with default state
+  const { state, setState, undo, redo, canUndo, canRedo } = useHistory({
+    tables: [],
+    relationships: [],
+    diagramName: 'Untitled Diagram'
+  });
+
+  const tables = state.tables;
+  const relationships = state.relationships;
+
+  const setTables = (newTables: Table[]) => {
+    setState({ ...state, tables: newTables });
+  };
+
+  const setRelationships = (newRels: Relationship[]) => {
+    setState({ ...state, relationships: newRels });
+  };
+
+  // Load from storage on mount
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         const data = JSON.parse(saved);
-        setTables(data.tables || []);
-        setRelationships(data.relationships || []);
+        setState({
+          tables: data.tables || [],
+          relationships: data.relationships || [],
+          diagramName: data.diagramName || 'Untitled Diagram'
+        });
         setDiagramName(data.diagramName || 'Untitled Diagram');
       } catch (e) {
         console.error('Failed to load saved state:', e);
       }
     } else {
-      setTables([
-        {
-          id: 'table_1',
-          name: 'User',
-          x: 100,
-          y: 100,
-          columns: [
-            { id: 'col_1', name: 'id', type: 'Int', isPrimaryKey: true, isForeignKey: false, isNullable: false },
-            { id: 'col_2', name: 'email', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: false },
-            { id: 'col_3', name: 'name', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: true },
-            { id: 'col_4', name: 'createdAt', type: 'DateTime', isPrimaryKey: false, isForeignKey: false, isNullable: false }
-          ]
-        },
-        {
-          id: 'table_2',
-          name: 'Post',
-          x: 500,
-          y: 100,
-          columns: [
-            { id: 'col_5', name: 'id', type: 'Int', isPrimaryKey: true, isForeignKey: false, isNullable: false },
-            { id: 'col_6', name: 'title', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: false },
-            { id: 'col_7', name: 'content', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: true },
-            { id: 'col_8', name: 'authorId', type: 'Int', isPrimaryKey: false, isForeignKey: true, isNullable: false }
-          ]
-        }
-      ]);
+      // Default tables
+      setState({
+        tables: [
+          {
+            id: 'table_1',
+            name: 'User',
+            x: 100,
+            y: 100,
+            columns: [
+              {
+                id: 'col_1', name: 'id', type: 'Int', isPrimaryKey: true, isForeignKey: false, isNullable: false,
+                isUnique: undefined
+              },
+              {
+                id: 'col_2', name: 'email', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: false,
+                isUnique: undefined
+              },
+              {
+                id: 'col_3', name: 'name', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: true,
+                isUnique: undefined
+              },
+              {
+                id: 'col_4', name: 'createdAt', type: 'DateTime', isPrimaryKey: false, isForeignKey: false, isNullable: false,
+                isUnique: undefined
+              }
+            ]
+          },
+          {
+            id: 'table_2',
+            name: 'Post',
+            x: 500,
+            y: 100,
+            columns: [
+              {
+                id: 'col_5', name: 'id', type: 'Int', isPrimaryKey: true, isForeignKey: false, isNullable: false,
+                isUnique: undefined
+              },
+              {
+                id: 'col_6', name: 'title', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: false,
+                isUnique: undefined
+              },
+              {
+                id: 'col_7', name: 'content', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: true,
+                isUnique: undefined
+              },
+              {
+                id: 'col_8', name: 'authorId', type: 'Int', isPrimaryKey: false, isForeignKey: true, isNullable: false,
+                isUnique: undefined
+              }
+            ]
+          }
+        ],
+        relationships: [],
+        diagramName: 'Untitled Diagram'
+      });
     }
   }, []);
 
-  useEffect(() => {
-    const state = { tables, relationships, diagramName };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [tables, relationships, diagramName]);
 
+  // Save to storage whenever state changes
+  useEffect(() => {
+    const stateToSave = { ...state, diagramName };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+  }, [state, diagramName]);
+
+  // Update FK markers when relationships change
   useEffect(() => {
     const updatedTables = tables.map(table => {
       const updatedColumns = table.columns.map(col => {
@@ -100,6 +175,21 @@ export default function Home() {
     }
   }, [relationships]);
 
+  // Keyboard shortcuts
+  useKeyboardShortcuts({
+    onUndo: () => canUndo && undo(),
+    onRedo: () => canRedo && redo(),
+    onSave: () => handleExport('sql'),
+    onDelete: () => handleDeleteSelected(),
+    onSelectAll: () => setSelectedTables(new Set(tables.map(t => t.id))),
+    onCopy: () => handleCopy(),
+    onPaste: () => handlePaste(),
+    onZoomIn: () => setZoom(Math.min(2, zoom + 0.1)),
+    onZoomOut: () => setZoom(Math.max(0.5, zoom - 0.1)),
+    onResetZoom: () => resetZoom(),
+    onNewTable: () => addTable()
+  });
+
   const addTable = () => {
     const newTable: Table = {
       id: `table_${Date.now()}`,
@@ -107,7 +197,10 @@ export default function Home() {
       x: 100 + tables.length * 50,
       y: 100 + tables.length * 50,
       columns: [
-        { id: `col_${Date.now()}`, name: 'id', type: 'Int', isPrimaryKey: true, isForeignKey: false, isNullable: false }
+        {
+          id: `col_${Date.now()}`, name: 'id', type: 'Int', isPrimaryKey: true, isForeignKey: false, isNullable: false,
+          isUnique: undefined
+        }
       ]
     };
     setTables([...tables, newTable]);
@@ -120,6 +213,55 @@ export default function Home() {
   const deleteTable = (id: string) => {
     setTables(tables.filter(t => t.id !== id));
     setRelationships(relationships.filter(r => r.fromTableId !== id && r.toTableId !== id));
+    setSelectedTables(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(id);
+      return newSet;
+    });
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedTables.size > 0) {
+      const remainingTables = tables.filter(t => !selectedTables.has(t.id));
+      const remainingRels = relationships.filter(
+        r => !selectedTables.has(r.fromTableId) && !selectedTables.has(r.toTableId)
+      );
+      setTables(remainingTables);
+      setRelationships(remainingRels);
+      setSelectedTables(new Set());
+    }
+  };
+
+  const handleCopy = () => {
+    if (selectedTables.size > 0) {
+      const tablesToCopy = tables.filter(t => selectedTables.has(t.id));
+      setCopiedTables(tablesToCopy);
+    }
+  };
+
+  const handlePaste = () => {
+    if (copiedTables.length > 0) {
+      const newTables = copiedTables.map(table => ({
+        ...table,
+        id: `table_${Date.now()}_${Math.random()}`,
+        name: `${table.name}_copy`,
+        x: table.x + 50,
+        y: table.y + 50,
+        columns: table.columns.map(col => ({
+          ...col,
+          id: `col_${Date.now()}_${Math.random()}`,
+          isForeignKey: false
+        }))
+      }));
+      setTables([...tables, ...newTables]);
+      setSelectedTables(new Set(newTables.map(t => t.id)));
+    }
+  };
+
+  const snapPosition = (pos: number): number => {
+    if (!snapToGrid) return pos;
+    const gridSize = 50;
+    return Math.round(pos / gridSize) * gridSize;
   };
 
   const handleDragStart = (e: React.MouseEvent, tableId: string) => {
@@ -127,6 +269,10 @@ export default function Home() {
     e.stopPropagation();
     setDraggingTable(tableId);
     setDragStart({ x: e.clientX, y: e.clientY });
+    
+    if (!selectedTables.has(tableId)) {
+      setSelectedTables(new Set([tableId]));
+    }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -140,7 +286,18 @@ export default function Home() {
     if (draggingTable && activeTool === 'select') {
       const dx = (e.clientX - dragStart.x) / zoom;
       const dy = (e.clientY - dragStart.y) / zoom;
-      setTables(tables.map(t => t.id === draggingTable ? { ...t, x: t.x + dx, y: t.y + dy } : t));
+      
+      setTables(tables.map(t => {
+        if (selectedTables.has(t.id)) {
+          return {
+            ...t,
+            x: snapPosition(t.x + dx),
+            y: snapPosition(t.y + dy)
+          };
+        }
+        return t;
+      }));
+      
       setDragStart({ x: e.clientX, y: e.clientY });
     } else if ((isPanning || activeTool === 'hand') && !draggingTable) {
       const dx = e.clientX - panStart.x;
@@ -160,6 +317,8 @@ export default function Home() {
       e.preventDefault();
       setIsPanning(true);
       setPanStart({ x: e.clientX, y: e.clientY });
+    } else if (e.target === canvasRef.current && activeTool === 'select') {
+      setSelectedTables(new Set());
     }
   };
 
@@ -190,7 +349,9 @@ export default function Home() {
         fromColumnId: pendingRelationship.columnId,
         toTableId: tableId,
         toColumnId: columnId,
-        type: relType
+        type: relType,
+        onUpdate: undefined,
+        onDelete: undefined
       };
       setRelationships([...relationships, newRel]);
       setPendingRelationship(null);
@@ -212,35 +373,83 @@ export default function Home() {
     setEditingRelationship(null);
   };
 
-  const exportSQL = () => {
-    let sql = `-- Database Schema: ${diagramName}\n-- Generated: ${new Date().toISOString()}\n\n`;
-    tables.forEach(table => {
-      sql += `CREATE TABLE ${table.name} (\n`;
-      sql += table.columns.map(col => {
-        let line = `  ${col.name} ${col.type === 'Int' ? 'INTEGER' : col.type === 'String' ? 'VARCHAR(255)' : col.type === 'DateTime' ? 'TIMESTAMP' : col.type === 'Boolean' ? 'BOOLEAN' : col.type}`;
-        if (col.isPrimaryKey) line += ' PRIMARY KEY';
-        if (!col.isNullable) line += ' NOT NULL';
-        if (col.defaultValue) line += ` DEFAULT ${col.defaultValue}`;
-        return line;
-      }).join(',\n');
-      sql += '\n);\n\n';
-    });
-    relationships.forEach(rel => {
-      const fromTable = tables.find(t => t.id === rel.fromTableId);
-      const toTable = tables.find(t => t.id === rel.toTableId);
-      const fromCol = fromTable?.columns.find(c => c.id === rel.fromColumnId);
-      const toCol = toTable?.columns.find(c => c.id === rel.toColumnId);
-      if (fromTable && toTable && fromCol && toCol) {
-        sql += `ALTER TABLE ${fromTable.name}\n  ADD FOREIGN KEY (${fromCol.name})\n  REFERENCES ${toTable.name}(${toCol.name});\n\n`;
+  const handleExport = (format: ExportFormat) => {
+    let content = '';
+    let filename = diagramName.replace(/\s+/g, '_');
+    
+    switch (format) {
+      case 'sql':
+        content = exportToSQL(tables, relationships, diagramName);
+        downloadFile(content, `${filename}.sql`);
+        break;
+      case 'prisma':
+        content = exportToPrisma(tables, relationships);
+        downloadFile(content, `${filename}.prisma`);
+        break;
+      case 'typeorm':
+        content = exportToTypeORM(tables, relationships);
+        downloadFile(content, `${filename}.typeorm.ts`);
+        break;
+      case 'sequelize':
+        content = exportToSequelize(tables, relationships);
+        downloadFile(content, `${filename}.sequelize.js`);
+        break;
+      case 'django':
+        content = exportToDjango(tables, relationships);
+        downloadFile(content, `${filename}.models.py`);
+        break;
+      case 'graphql':
+        content = exportToGraphQL(tables, relationships);
+        downloadFile(content, `${filename}.graphql`);
+        break;
+      case 'png':
+      case 'jpeg':
+        exportAsImage(format);
+        break;
+    }
+    setShowExportMenu(false);
+  };
+
+  const handleImport = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      try {
+        let imported;
+        if (file.name.endsWith('.sql')) {
+          imported = importFromSQL(content);
+        } else if (file.name.endsWith('.prisma')) {
+          imported = importFromPrisma(content);
+        } else {
+          alert('Unsupported file format');
+          return;
+        }
+        
+        setTables(imported.tables);
+        setRelationships(imported.relationships);
+        setShowImportModal(false);
+      } catch (err) {
+        alert('Error importing file: ' + (err instanceof Error ? err.message : String(err)));
       }
-    });
-    const blob = new Blob([sql], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${diagramName.replace(/\s+/g, '_')}_schema.sql`;
-    a.click();
-    URL.revokeObjectURL(url);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleAutoLayout = (type: 'force' | 'grid' | 'hierarchical') => {
+    let layoutedTables;
+    switch (type) {
+      case 'force':
+        layoutedTables = autoLayout(tables, relationships);
+        break;
+      case 'grid':
+        layoutedTables = gridLayout(tables);
+        break;
+      case 'hierarchical':
+        layoutedTables = hierarchicalLayout(tables, relationships);
+        break;
+    }
+    setTables(layoutedTables);
+    setShowLayoutMenu(false);
   };
 
   const exportAsImage = (format: 'png' | 'jpeg') => {
@@ -267,6 +476,7 @@ export default function Home() {
     ctx.fillStyle = isDarkMode ? '#030712' : '#f9fafb';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Draw relationships
     relationships.forEach(rel => {
       const fromTable = tables.find(t => t.id === rel.fromTableId);
       const toTable = tables.find(t => t.id === rel.toTableId);
@@ -324,7 +534,8 @@ export default function Home() {
       ctx.fillText(rel.type === 'one-to-one' ? '1:1' : rel.type === 'one-to-many' ? '1:N' : 'N:M', labelX, labelY);
     });
 
-    tables.forEach(table => {
+    // Draw tables
+    tables.forEach((table: { x: number; y: number; columns: { isPrimaryKey: any; isForeignKey: any; name: string; type: string; }[]; name: string; }) => {
       const x = table.x - minX, y = table.y - minY;
       ctx.fillStyle = isDarkMode ? '#1f2937' : '#ffffff';
       ctx.strokeStyle = isDarkMode ? '#374151' : '#d1d5db';
@@ -345,7 +556,7 @@ export default function Home() {
       ctx.textBaseline = 'middle';
       ctx.fillText(table.name, x + 40, y + 21);
 
-      table.columns.forEach((col, idx) => {
+      table.columns.forEach((col: { isPrimaryKey: any; isForeignKey: any; name: string; type: string; }, idx: number) => {
         const colY = y + 50 + idx * 35;
         ctx.fillStyle = isDarkMode ? '#1f2937' : '#ffffff';
         ctx.fillRect(x + 8, colY, 264, 35);
@@ -380,14 +591,14 @@ export default function Home() {
       a.click();
       URL.revokeObjectURL(url);
     }, format === 'png' ? 'image/png' : 'image/jpeg', format === 'jpeg' ? 0.95 : undefined);
-
-    setShowExportMenu(false);
   };
 
   const resetZoom = () => { setZoom(1); setOffset({ x: 0, y: 0 }); };
+  
   const clearAll = () => {
     if (confirm('Are you sure you want to clear all tables and relationships?')) {
-      setTables([]); setRelationships([]); setDiagramName('Untitled Diagram');
+      setState({ tables: [], relationships: [], diagramName: 'Untitled Diagram' });
+      setDiagramName('Untitled Diagram');
     }
   };
 
@@ -399,9 +610,14 @@ export default function Home() {
   return (
     <div className={`h-screen flex ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'}`}>
       <div className={`w-96 ${isDarkMode ? 'bg-gray-900' : 'bg-white'}`}>
-        <CodeEditor tables={tables} relationships={relationships}
-          onApplyCode={(newTables, newRels) => { setTables(newTables); setRelationships(newRels); }}
-          isDarkMode={isDarkMode} />
+        <CodeEditor 
+          tables={tables} 
+          relationships={relationships}
+          onApplyCode={(newTables, newRels) => {
+            setState({ ...state, tables: newTables, relationships: newRels });
+          }}
+          isDarkMode={isDarkMode} 
+        />
       </div>
 
       <div className="flex-1 flex flex-col">
@@ -420,28 +636,98 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-3">
+              {/* Undo/Redo */}
+              <div className="flex items-center gap-1">
+                <button onClick={undo} disabled={!canUndo}
+                  className={`p-2 rounded-md transition-colors ${
+                    canUndo 
+                      ? isDarkMode ? 'bg-gray-800 text-gray-200 hover:bg-gray-700' : 'bg-white text-gray-700 hover:bg-gray-100'
+                      : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                  }`} title="Undo (Ctrl+Z)">
+                  <Undo2 size={18} />
+                </button>
+                <button onClick={redo} disabled={!canRedo}
+                  className={`p-2 rounded-md transition-colors ${
+                    canRedo 
+                      ? isDarkMode ? 'bg-gray-800 text-gray-200 hover:bg-gray-700' : 'bg-white text-gray-700 hover:bg-gray-100'
+                      : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                  }`} title="Redo (Ctrl+Y)">
+                  <Redo2 size={18} />
+                </button>
+              </div>
+
+              <div className="h-6 w-px bg-gray-300"></div>
+
               <button onClick={addTable}
                 className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 font-medium transition-colors">
                 <Plus size={18} /><span>New Table</span>
               </button>
-              <button onClick={exportSQL}
-                className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 font-medium transition-colors">
-                <Download size={18} /><span>Export SQL</span>
-              </button>
-              
+
+              {/* Layout Menu */}
+              <div className="relative">
+                <button onClick={() => setShowLayoutMenu(!showLayoutMenu)}
+                  className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 font-medium transition-colors">
+                  <Layout size={18} /><span>Auto Layout</span>
+                </button>
+                {showLayoutMenu && (
+                  <div className={`absolute right-0 mt-2 w-48 rounded-md shadow-lg ${isDarkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'} z-50`}>
+                    <div className="py-1">
+                      <button onClick={() => handleAutoLayout('force')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        Force-Directed
+                      </button>
+                      <button onClick={() => handleAutoLayout('grid')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        Grid Layout
+                      </button>
+                      <button onClick={() => handleAutoLayout('hierarchical')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        Hierarchical
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Export Menu */}
               <div className="relative">
                 <button onClick={() => setShowExportMenu(!showExportMenu)}
-                  className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 font-medium transition-colors">
-                  <ImageIcon size={18} /><span>Export Image</span>
+                  className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 font-medium transition-colors">
+                  <Download size={18} /><span>Export</span>
                 </button>
                 {showExportMenu && (
-                  <div className={`absolute right-0 mt-2 w-40 rounded-md shadow-lg ${isDarkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'} z-50`}>
+                  <div className={`absolute right-0 mt-2 w-48 rounded-md shadow-lg ${isDarkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'} z-50`}>
                     <div className="py-1">
-                      <button onClick={() => exportAsImage('png')}
+                      <button onClick={() => handleExport('sql')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        SQL
+                      </button>
+                      <button onClick={() => handleExport('prisma')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        Prisma Schema
+                      </button>
+                      <button onClick={() => handleExport('typeorm')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        TypeORM
+                      </button>
+                      <button onClick={() => handleExport('sequelize')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        Sequelize
+                      </button>
+                      <button onClick={() => handleExport('django')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        Django Models
+                      </button>
+                      <button onClick={() => handleExport('graphql')}
+                        className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
+                        GraphQL Schema
+                      </button>
+                      <div className={`border-t my-1 ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}></div>
+                      <button onClick={() => handleExport('png')}
                         className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
                         Export as PNG
                       </button>
-                      <button onClick={() => exportAsImage('jpeg')}
+                      <button onClick={() => handleExport('jpeg')}
                         className={`w-full text-left px-4 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}>
                         Export as JPEG
                       </button>
@@ -450,10 +736,19 @@ export default function Home() {
                 )}
               </div>
 
+              {/* Import */}
+              <button onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 font-medium transition-colors">
+                <Upload size={18} /><span>Import</span>
+              </button>
+              <input ref={fileInputRef} type="file" accept=".sql,.prisma" className="hidden"
+                onChange={(e) => e.target.files?.[0] && handleImport(e.target.files[0])} />
+
               <button onClick={clearAll}
                 className="flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-red-600 text-white hover:bg-red-700">
                 <Trash2 size={18} /><span>Clear</span>
               </button>
+              
               <button onClick={() => setIsDarkMode(!isDarkMode)}
                 className={`p-2 rounded-md transition-colors ${isDarkMode ? 'bg-gray-800 text-gray-200 hover:bg-gray-700 border border-gray-700' : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'}`}
                 title="Toggle Theme">
@@ -462,6 +757,7 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Toolbar */}
           <div className={`px-6 py-3 border-t flex items-center justify-between ${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-gray-50 border-gray-200'}`}>
             <div className="flex items-center gap-2">
               <div className={`flex items-center rounded-md overflow-hidden border ${isDarkMode ? 'border-gray-700' : 'border-gray-300'}`}>
@@ -505,6 +801,20 @@ export default function Home() {
                   </svg>
                 </button>
               </div>
+
+              <div className="w-px h-6 bg-gray-300 mx-2"></div>
+
+              {/* Grid Options */}
+              <button onClick={() => setShowGrid(!showGrid)}
+                className={`px-2 py-1 rounded text-sm ${showGrid ? 'bg-blue-600 text-white' : isDarkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}
+                title="Toggle Grid">
+                <Grid3x3 size={18} />
+              </button>
+              <button onClick={() => setSnapToGrid(!snapToGrid)}
+                className={`px-3 py-1 rounded text-xs font-medium ${snapToGrid ? 'bg-blue-600 text-white' : isDarkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}`}
+                title="Snap to Grid">
+                SNAP
+              </button>
             </div>
 
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-md ${isDarkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-300'}`}>
@@ -522,13 +832,14 @@ export default function Home() {
               <div className="w-px h-4 bg-gray-600 mx-1"></div>
               <button onClick={resetZoom}
                 className={`p-1 rounded hover:bg-gray-700 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}
-                title="Reset View (0)">
+                title="Reset View (Ctrl+0)">
                 <Minimize2 size={16} />
               </button>
             </div>
 
             <div className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
               {tables.length} {tables.length === 1 ? 'table' : 'tables'} · {relationships.length} {relationships.length === 1 ? 'relationship' : 'relationships'}
+              {selectedTables.size > 0 && ` · ${selectedTables.size} selected`}
             </div>
           </div>
         </header>
@@ -539,6 +850,14 @@ export default function Home() {
               activeTool === 'hand' ? 'cursor-grab active:cursor-grabbing' : 
               pendingRelationship ? 'cursor-crosshair' : 'cursor-default'
             } ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'}`}
+            style={{
+              backgroundImage: showGrid ? isDarkMode 
+                ? 'radial-gradient(circle, #374151 1px, transparent 1px)'
+                : 'radial-gradient(circle, #d1d5db 1px, transparent 1px)'
+              : 'none',
+              backgroundSize: showGrid ? `${50 * zoom}px ${50 * zoom}px` : 'auto',
+              backgroundPosition: showGrid ? `${offset.x}px ${offset.y}px` : '0 0'
+            }}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
@@ -553,7 +872,14 @@ export default function Home() {
                 <TableCard key={table.id} table={table} onUpdateTable={updateTable}
                   onDeleteTable={deleteTable} onAddRelationship={addRelationship}
                   isDragging={draggingTable === table.id} onDragStart={handleDragStart}
-                  isDarkMode={isDarkMode} />
+                  isDarkMode={isDarkMode} 
+                  isSelected={selectedTables.has(table.id)}
+                  onSelect={(id) => {
+                    const newSelected = new Set(selectedTables);
+                    if (newSelected.has(id)) newSelected.delete(id);
+                    else newSelected.add(id);
+                    setSelectedTables(newSelected);
+                  }} />
               ))}
             </div>
 

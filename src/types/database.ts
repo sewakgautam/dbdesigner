@@ -20,6 +20,8 @@ export interface Table {
 }
 
 export interface Relationship {
+  onUpdate: any;
+  onDelete: any;
   id: string;
   fromTableId: string;
   fromColumnId: string;

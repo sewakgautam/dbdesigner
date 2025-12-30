@@ -122,7 +122,9 @@ export const importFromSQL = (sqlContent: string): { tables: Table[], relationsh
         fromColumnId: fromCol.id,
         toTableId: toTable.id,
         toColumnId: toCol.id,
-        type: 'one-to-many'
+        type: 'one-to-many',
+        onUpdate: undefined,
+        onDelete: undefined
       });
     }
   }
@@ -233,7 +235,9 @@ export const importFromPrisma = (prismaContent: string): { tables: Table[], rela
           fromColumnId: fromColumn.id,
           toTableId: toTable.id,
           toColumnId: toColumn.id,
-          type: 'one-to-many'
+          type: 'one-to-many',
+          onUpdate: undefined,
+          onDelete: undefined
         });
       }
     }

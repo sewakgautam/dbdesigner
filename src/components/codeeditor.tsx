@@ -188,7 +188,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             type: isArray ? `${colType}[]` : colType,
             isPrimaryKey,
             isForeignKey: false,
-            isNullable
+            isNullable,
+            isUnique: undefined
           });
         }
       }
@@ -213,6 +214,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             toTableId: toTable.id,
             toColumnId: toColumn.id,
             type: 'one-to-many' // Default, can be inferred from field types
+            ,
+            onUpdate: undefined,
+            onDelete: undefined
           });
         }
       }

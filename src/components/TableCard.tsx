@@ -13,6 +13,8 @@ interface TableCardProps {
   isDragging: boolean;
   onDragStart: (e: React.MouseEvent, tableId: string) => void;
   isDarkMode: boolean;
+  isSelected?: boolean;
+  onSelect?: (id: string) => void;
 }
 
 export const TableCard: React.FC<TableCardProps> = ({
@@ -22,10 +24,14 @@ export const TableCard: React.FC<TableCardProps> = ({
   onAddRelationship,
   isDragging,
   onDragStart,
-  isDarkMode
+  isDarkMode,
+  isSelected = false,
+  onSelect
 }) => {
   const [editingName, setEditingName] = useState(false);
   const [newColumnName, setNewColumnName] = useState('');
+  const [draggedColumnIndex, setDraggedColumnIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const addColumn = () => {
     if (!newColumnName.trim()) return;
@@ -36,7 +42,8 @@ export const TableCard: React.FC<TableCardProps> = ({
       type: 'String',
       isPrimaryKey: false,
       isForeignKey: false,
-      isNullable: true
+      isNullable: true,
+      isUnique: undefined
     };
 
     onUpdateTable({
@@ -70,9 +77,53 @@ export const TableCard: React.FC<TableCardProps> = ({
     onAddRelationship(table.id, columnId, x, y);
   };
 
+  const handleColumnDragStart = (e: React.DragEvent, index: number) => {
+    e.stopPropagation();
+    setDraggedColumnIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleColumnDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (draggedColumnIndex === null || draggedColumnIndex === index) return;
+    setDragOverIndex(index);
+  };
+
+  const handleColumnDrop = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (draggedColumnIndex === null || draggedColumnIndex === index) return;
+
+    const newColumns = [...table.columns];
+    const [draggedColumn] = newColumns.splice(draggedColumnIndex, 1);
+    newColumns.splice(index, 0, draggedColumn);
+
+    onUpdateTable({ ...table, columns: newColumns });
+    setDraggedColumnIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleColumnDragEnd = () => {
+    setDraggedColumnIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleTableClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget && onSelect) {
+      e.stopPropagation();
+      onSelect(table.id);
+    }
+  };
+
   return (
     <div
-      className={`absolute rounded-lg shadow-lg border ${
+      className={`absolute rounded-lg shadow-lg border transition-all ${
+        isSelected 
+          ? 'ring-2 ring-blue-500 ring-offset-2'
+          : ''
+      } ${
         isDarkMode 
           ? 'bg-gray-800 border-gray-700' 
           : 'bg-white border-gray-300'
@@ -83,6 +134,7 @@ export const TableCard: React.FC<TableCardProps> = ({
         width: 280,
         cursor: isDragging ? 'grabbing' : 'default'
       }}
+      onClick={handleTableClick}
     >
       {/* Header */}
       <div className={`p-3 rounded-t-lg flex items-center justify-between ${
@@ -99,7 +151,11 @@ export const TableCard: React.FC<TableCardProps> = ({
               value={table.name}
               onChange={(e) => onUpdateTable({ ...table, name: e.target.value })}
               onBlur={() => setEditingName(false)}
-              onKeyDown={(e) => e.key === 'Enter' && setEditingName(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') setEditingName(false);
+                e.stopPropagation();
+              }}
+              onClick={(e) => e.stopPropagation()}
               className={`px-2 py-1 rounded text-sm flex-1 ${
                 isDarkMode ? 'bg-gray-600' : 'bg-gray-700'
               }`}
@@ -108,7 +164,10 @@ export const TableCard: React.FC<TableCardProps> = ({
           ) : (
             <span
               className="font-semibold flex-1"
-              onDoubleClick={() => setEditingName(true)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setEditingName(true);
+              }}
             >
               {table.name}
             </span>
@@ -117,9 +176,11 @@ export const TableCard: React.FC<TableCardProps> = ({
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onDeleteTable(table.id);
+            if (confirm(`Delete table "${table.name}"?`)) {
+              onDeleteTable(table.id);
+            }
           }}
-          className="hover:bg-gray-600 p-1 rounded"
+          className="hover:bg-gray-600 p-1 rounded transition-colors"
         >
           <Trash2 size={16} />
         </button>
@@ -127,14 +188,22 @@ export const TableCard: React.FC<TableCardProps> = ({
 
       {/* Columns */}
       <div className="p-2">
-        {table.columns.map((column) => (
+        {table.columns.map((column, index) => (
           <div
             key={column.id}
-            className={`flex items-center gap-2 p-2 rounded group cursor-pointer ${
+            draggable
+            onDragStart={(e) => handleColumnDragStart(e, index)}
+            onDragOver={(e) => handleColumnDragOver(e, index)}
+            onDrop={(e) => handleColumnDrop(e, index)}
+            onDragEnd={handleColumnDragEnd}
+            className={`flex items-center gap-2 p-2 rounded group cursor-pointer transition-all ${
+              dragOverIndex === index ? 'border-t-2 border-blue-500' : ''
+            } ${
               isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
             }`}
             onClick={(e) => handleColumnClick(e, column.id)}
           >
+            <GripVertical size={12} className="text-gray-500 cursor-grab" />
             {column.isPrimaryKey && (
               <span title="Primary Key">
                 <Key size={14} className="text-amber-500" />
@@ -164,7 +233,7 @@ export const TableCard: React.FC<TableCardProps> = ({
                 updateColumn(column.id, { type: e.target.value });
               }}
               onClick={(e) => e.stopPropagation()}
-              className={`text-xs bg-transparent border-none outline-none ${
+              className={`text-xs bg-transparent border-none outline-none cursor-pointer ${
                 isDarkMode ? 'text-gray-300' : 'text-gray-600'
               }`}
             >
@@ -174,13 +243,19 @@ export const TableCard: React.FC<TableCardProps> = ({
               <option>DateTime</option>
               <option>Float</option>
               <option>Json</option>
+              <option>BigInt</option>
+              <option>Decimal</option>
             </select>
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 updateColumn(column.id, { isPrimaryKey: !column.isPrimaryKey });
               }}
-              className={`text-xs px-1 ${column.isPrimaryKey ? 'text-amber-600' : 'text-gray-400'}`}
+              className={`text-xs px-1 rounded transition-colors ${
+                column.isPrimaryKey 
+                  ? 'text-amber-600 bg-amber-100' 
+                  : 'text-gray-400 hover:bg-gray-200'
+              }`}
               title="Primary Key"
             >
               PK
@@ -188,9 +263,25 @@ export const TableCard: React.FC<TableCardProps> = ({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                deleteColumn(column.id);
+                updateColumn(column.id, { isNullable: !column.isNullable });
               }}
-              className="opacity-0 group-hover:opacity-100 text-red-600 hover:text-red-700"
+              className={`text-xs px-1 rounded transition-colors ${
+                !column.isNullable 
+                  ? 'text-red-600 bg-red-100' 
+                  : 'text-gray-400 hover:bg-gray-200'
+              }`}
+              title="Not Nullable"
+            >
+              NN
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (confirm(`Delete column "${column.name}"?`)) {
+                  deleteColumn(column.id);
+                }
+              }}
+              className="opacity-0 group-hover:opacity-100 text-red-600 hover:text-red-700 transition-opacity"
             >
               <Trash2 size={14} />
             </button>
@@ -205,7 +296,11 @@ export const TableCard: React.FC<TableCardProps> = ({
             type="text"
             value={newColumnName}
             onChange={(e) => setNewColumnName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addColumn()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addColumn();
+              e.stopPropagation();
+            }}
+            onClick={(e) => e.stopPropagation()}
             placeholder="New column..."
             className={`flex-1 text-sm px-2 py-1 border rounded ${
               isDarkMode 
@@ -214,8 +309,11 @@ export const TableCard: React.FC<TableCardProps> = ({
             }`}
           />
           <button
-            onClick={addColumn}
-            className={`p-1 rounded ${
+            onClick={(e) => {
+              e.stopPropagation();
+              addColumn();
+            }}
+            className={`p-1 rounded transition-colors ${
               isDarkMode 
                 ? 'bg-gray-700 text-white hover:bg-gray-600' 
                 : 'bg-gray-800 text-white hover:bg-gray-700'
