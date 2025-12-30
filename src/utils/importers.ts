@@ -15,13 +15,13 @@ export const importFromSQL = (sqlContent: string): { tables: Table[], relationsh
   const tableRegex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(\w+)`?\s*\(([\s\S]*?)\);/gi;
   let match;
   let tableIndex = 0;
+  const foreignKeyStore: Array<{ fromTable: string, from: string, toTable: string, to: string }> = [];
 
   while ((match = tableRegex.exec(cleanSQL)) !== null) {
     const tableName = match[1];
     const tableContent = match[2];
     
     const columns: Column[] = [];
-    const foreignKeys: Array<{ from: string, toTable: string, to: string }> = [];
 
     // Split by comma, but not within parentheses
     const columnDefs = tableContent.split(/,(?![^(]*\))/);
@@ -30,10 +30,11 @@ export const importFromSQL = (sqlContent: string): { tables: Table[], relationsh
       const trimmed = colDef.trim();
       
       // Check if it's a foreign key constraint
-      if (trimmed.match(/FOREIGN\s+KEY/i)) {
+      if (trimmed.match(/FOREIGN\s+KEY/i) || trimmed.match(/CONSTRAINT.*FOREIGN\s+KEY/i)) {
         const fkMatch = trimmed.match(/FOREIGN\s+KEY\s*\(`?(\w+)`?\)\s*REFERENCES\s*`?(\w+)`?\s*\(`?(\w+)`?\)/i);
         if (fkMatch) {
-          foreignKeys.push({
+          foreignKeyStore.push({
+            fromTable: tableName,
             from: fkMatch[1],
             toTable: fkMatch[2],
             to: fkMatch[3]
@@ -47,14 +48,14 @@ export const importFromSQL = (sqlContent: string): { tables: Table[], relationsh
       if (parts.length < 2) return;
 
       const colName = parts[0].replace(/`/g, '');
-      let colType = parts[1].toUpperCase();
+      let colType = parts[1].toUpperCase().replace(/\(.*\)/, '');
       
       // Convert SQL types to our types
       if (colType.includes('INT')) colType = 'Int';
       else if (colType.includes('VARCHAR') || colType.includes('TEXT') || colType.includes('CHAR')) colType = 'String';
       else if (colType.includes('BOOL')) colType = 'Boolean';
-      else if (colType.includes('TIMESTAMP') || colType.includes('DATE')) colType = 'DateTime';
-      else if (colType.includes('FLOAT') || colType.includes('DOUBLE') || colType.includes('DECIMAL')) colType = 'Float';
+      else if (colType.includes('TIMESTAMP') || colType.includes('DATETIME') || colType.includes('DATE')) colType = 'DateTime';
+      else if (colType.includes('FLOAT') || colType.includes('DOUBLE') || colType.includes('DECIMAL') || colType.includes('REAL')) colType = 'Float';
       else colType = 'String';
 
       const isPrimaryKey = trimmed.match(/PRIMARY\s+KEY/i) !== null;
@@ -63,14 +64,14 @@ export const importFromSQL = (sqlContent: string): { tables: Table[], relationsh
       const defaultMatch = trimmed.match(/DEFAULT\s+([^\s,]+)/i);
       
       columns.push({
-        id: `col_${Date.now()}_${colIndex}`,
+        id: `col_${Date.now()}_${tableIndex}_${colIndex}`,
         name: colName,
         type: colType,
         isPrimaryKey,
-        isForeignKey: false,
+        isForeignKey: false, // Will be set later
         isNullable: !isNotNull && !isPrimaryKey,
         isUnique,
-        defaultValue: defaultMatch ? defaultMatch[1] : undefined
+        defaultValue: defaultMatch ? defaultMatch[1].replace(/['"]/g, '') : undefined
       });
     });
 
@@ -87,35 +88,33 @@ export const importFromSQL = (sqlContent: string): { tables: Table[], relationsh
     };
 
     tables.push(table);
-    
-    // Store foreign keys for later processing
-    foreignKeys.forEach(fk => {
-      const fromCol = columns.find(c => c.name === fk.from);
-      if (fromCol) {
-        fromCol.isForeignKey = true;
-      }
-    });
-
     tableIndex++;
   }
 
   // Parse ALTER TABLE statements for foreign keys
-  const alterRegex = /ALTER\s+TABLE\s+`?(\w+)`?\s+ADD\s+(?:CONSTRAINT\s+\w+\s+)?FOREIGN\s+KEY\s*\(`?(\w+)`?\)\s*REFERENCES\s*`?(\w+)`?\s*\(`?(\w+)`?\)/gi;
+  const alterRegex = /ALTER\s+TABLE\s+`?(\w+)`?\s+ADD\s+(?:CONSTRAINT\s+[\w_]+\s+)?FOREIGN\s+KEY\s*\(`?(\w+)`?\)\s*REFERENCES\s*`?(\w+)`?\s*\(`?(\w+)`?\)/gi;
   
   while ((match = alterRegex.exec(cleanSQL)) !== null) {
-    const fromTableName = match[1];
-    const fromColName = match[2];
-    const toTableName = match[3];
-    const toColName = match[4];
+    foreignKeyStore.push({
+      fromTable: match[1],
+      from: match[2],
+      toTable: match[3],
+      to: match[4]
+    });
+  }
 
-    const fromTable = tables.find(t => t.name === fromTableName);
-    const toTable = tables.find(t => t.name === toTableName);
-    const fromCol = fromTable?.columns.find(c => c.name === fromColName);
-    const toCol = toTable?.columns.find(c => c.name === toColName);
+  // Process all foreign keys
+  foreignKeyStore.forEach(fk => {
+    const fromTable = tables.find(t => t.name === fk.fromTable);
+    const toTable = tables.find(t => t.name === fk.toTable);
+    const fromCol = fromTable?.columns.find(c => c.name === fk.from);
+    const toCol = toTable?.columns.find(c => c.name === fk.to);
 
     if (fromTable && toTable && fromCol && toCol) {
+      // Mark column as foreign key
       fromCol.isForeignKey = true;
       
+      // Create relationship
       relationships.push({
         id: `rel_${Date.now()}_${relationships.length}`,
         fromTableId: fromTable.id,
@@ -127,7 +126,7 @@ export const importFromSQL = (sqlContent: string): { tables: Table[], relationsh
         onDelete: undefined
       });
     }
-  }
+  });
 
   return { tables, relationships };
 };
@@ -150,6 +149,11 @@ export const importFromPrisma = (prismaContent: string): { tables: Table[], rela
   lines.forEach((line, lineIndex) => {
     const trimmed = line.trim();
     
+    // Skip generator and datasource blocks
+    if (trimmed.startsWith('generator') || trimmed.startsWith('datasource')) {
+      return;
+    }
+    
     if (trimmed.startsWith('model ')) {
       if (currentTable) tables.push(currentTable);
       
@@ -169,7 +173,8 @@ export const importFromPrisma = (prismaContent: string): { tables: Table[], rela
         tables.push(currentTable);
         currentTable = null;
       }
-    } else if (currentTable && !trimmed.startsWith('generator') && !trimmed.startsWith('datasource')) {
+    } else if (currentTable) {
+      // Check if this is a relation field
       if (trimmed.includes('@relation')) {
         const parts = trimmed.split(/\s+/);
         const fieldName = parts[0];
@@ -189,6 +194,7 @@ export const importFromPrisma = (prismaContent: string): { tables: Table[], rela
         return;
       }
       
+      // Parse regular field
       const parts = trimmed.split(/\s+/);
       if (parts.length >= 2) {
         const colName = parts[0];
@@ -198,6 +204,7 @@ export const importFromPrisma = (prismaContent: string): { tables: Table[], rela
         const isUnique = trimmed.includes('@unique');
         const defaultMatch = trimmed.match(/@default\(([^)]+)\)/);
         
+        // Skip if it's a relation type (non-standard type)
         const standardTypes = ['String', 'Int', 'Float', 'Boolean', 'DateTime', 'Json', 'Bytes', 'Decimal', 'BigInt'];
         if (!standardTypes.includes(colType) && colType[0] === colType[0].toUpperCase()) {
           return;
@@ -208,7 +215,7 @@ export const importFromPrisma = (prismaContent: string): { tables: Table[], rela
           name: colName,
           type: colType,
           isPrimaryKey,
-          isForeignKey: false,
+          isForeignKey: false, // Will be set when processing relationships
           isNullable,
           isUnique,
           defaultValue: defaultMatch ? defaultMatch[1] : undefined
@@ -219,6 +226,7 @@ export const importFromPrisma = (prismaContent: string): { tables: Table[], rela
 
   if (currentTable) tables.push(currentTable);
   
+  // Process relationships
   relationshipsToProcess.forEach(rel => {
     const fromTable = tables.find(t => t.name === rel.fromTable);
     const toTable = tables.find(t => t.name === rel.toTable);
@@ -228,7 +236,10 @@ export const importFromPrisma = (prismaContent: string): { tables: Table[], rela
       const toColumn = toTable.columns.find(c => c.name === rel.toField);
       
       if (fromColumn && toColumn) {
+        // Mark the column as a foreign key
         fromColumn.isForeignKey = true;
+        
+        // Create the relationship
         relationships.push({
           id: `rel_${Date.now()}_${relationships.length}`,
           fromTableId: fromTable.id,

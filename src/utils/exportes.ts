@@ -5,12 +5,13 @@ export const exportToSQL = (tables: Table[], relationships: Relationship[], diag
   let sql = `-- Database Schema: ${diagramName}\n`;
   sql += `-- Generated: ${new Date().toISOString()}\n\n`;
   
+  // Create tables first
   tables.forEach(table => {
     sql += `CREATE TABLE ${table.name} (\n`;
     sql += table.columns.map((col, idx) => {
       let line = `  ${col.name} ${col.type === 'Int' ? 'INTEGER' : col.type === 'String' ? 'VARCHAR(255)' : col.type === 'DateTime' ? 'TIMESTAMP' : col.type === 'Boolean' ? 'BOOLEAN' : col.type}`;
       if (col.isPrimaryKey) line += ' PRIMARY KEY';
-      if (!col.isNullable) line += ' NOT NULL';
+      if (!col.isNullable && !col.isPrimaryKey) line += ' NOT NULL';
       if (col.defaultValue) line += ` DEFAULT ${col.defaultValue}`;
       if (col.isUnique) line += ' UNIQUE';
       return line;
@@ -18,21 +19,26 @@ export const exportToSQL = (tables: Table[], relationships: Relationship[], diag
     sql += '\n);\n\n';
   });
 
-  relationships.forEach(rel => {
-    const fromTable = tables.find(t => t.id === rel.fromTableId);
-    const toTable = tables.find(t => t.id === rel.toTableId);
-    const fromCol = fromTable?.columns.find(c => c.id === rel.fromColumnId);
-    const toCol = toTable?.columns.find(c => c.id === rel.toColumnId);
-    
-    if (fromTable && toTable && fromCol && toCol) {
-      sql += `ALTER TABLE ${fromTable.name}\n`;
-      sql += `  ADD FOREIGN KEY (${fromCol.name})\n`;
-      sql += `  REFERENCES ${toTable.name}(${toCol.name})`;
-      if (rel.onDelete) sql += `\n  ON DELETE ${rel.onDelete}`;
-      if (rel.onUpdate) sql += `\n  ON UPDATE ${rel.onUpdate}`;
-      sql += ';\n\n';
-    }
-  });
+  // Add foreign key constraints
+  if (relationships.length > 0) {
+    sql += `-- Foreign Key Constraints\n`;
+    relationships.forEach(rel => {
+      const fromTable = tables.find(t => t.id === rel.fromTableId);
+      const toTable = tables.find(t => t.id === rel.toTableId);
+      const fromCol = fromTable?.columns.find(c => c.id === rel.fromColumnId);
+      const toCol = toTable?.columns.find(c => c.id === rel.toColumnId);
+      
+      if (fromTable && toTable && fromCol && toCol) {
+        sql += `ALTER TABLE ${fromTable.name}\n`;
+        sql += `  ADD CONSTRAINT fk_${fromTable.name}_${fromCol.name}\n`;
+        sql += `  FOREIGN KEY (${fromCol.name})\n`;
+        sql += `  REFERENCES ${toTable.name}(${toCol.name})`;
+        if (rel.onDelete) sql += `\n  ON DELETE ${rel.onDelete}`;
+        if (rel.onUpdate) sql += `\n  ON UPDATE ${rel.onUpdate}`;
+        sql += ';\n\n';
+      }
+    });
+  }
 
   return sql;
 };
@@ -218,8 +224,8 @@ export const exportToPrisma = (tables: Table[], relationships: Relationship[]): 
   return code;
 };
 
-export const downloadFile = (content: string, filename: string, mimeType: string = 'text/plain') => {
-  const blob = new Blob([content], { type: mimeType });
+export const downloadFile = (content: string, filename: string) => {
+  const blob = new Blob([content], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
