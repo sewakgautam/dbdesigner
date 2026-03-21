@@ -1,7 +1,7 @@
 // types/database.ts
 
 export interface Column {
-  isUnique: any;
+  isUnique: boolean;
   id: string;
   name: string;
   type: string;
@@ -20,8 +20,8 @@ export interface Table {
 }
 
 export interface Relationship {
-  onUpdate: any;
-  onDelete: any;
+  onUpdate: string | undefined;
+  onDelete: string | undefined;
   id: string;
   fromTableId: string;
   fromColumnId: string;

@@ -189,7 +189,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             isPrimaryKey,
             isForeignKey: false,
             isNullable,
-            isUnique: undefined
+            isUnique: false
           });
         }
       }

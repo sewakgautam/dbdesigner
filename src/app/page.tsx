@@ -7,6 +7,8 @@ import { Canvas } from '@/components/canvas';
 import { TableCard } from '@/components/TableCard';
 import { CodeEditor } from '@/components/codeeditor';
 import { Plus, Download, ZoomIn, ZoomOut, Minimize2, Hand, Moon, Sun, Database, Trash2, Image as ImageIcon, Upload } from 'lucide-react';
+import { exportToSQL } from '@/utils/exportes';
+import { importFromSQL, importFromPrisma } from '@/utils/importers';
 
 const STORAGE_KEY = 'db_designer_state';
 
@@ -62,19 +64,19 @@ export default function Home() {
           columns: [
             {
               id: 'col_1', name: 'id', type: 'Int', isPrimaryKey: true, isForeignKey: false, isNullable: false,
-              isUnique: undefined
+              isUnique: false
             },
             {
               id: 'col_2', name: 'email', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: false,
-              isUnique: undefined
+              isUnique: false
             },
             {
               id: 'col_3', name: 'name', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: true,
-              isUnique: undefined
+              isUnique: false
             },
             {
               id: 'col_4', name: 'createdAt', type: 'DateTime', isPrimaryKey: false, isForeignKey: false, isNullable: false,
-              isUnique: undefined
+              isUnique: false
             }
           ]
         },
@@ -85,22 +87,22 @@ export default function Home() {
           columns: [
             {
               id: 'col_5', name: 'id', type: 'Int', isPrimaryKey: true, isForeignKey: false, isNullable: false,
-              isUnique: undefined
+              isUnique: false
             },
             {
               id: 'col_6', name: 'title', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: false,
-              isUnique: undefined
+              isUnique: false
             },
             {
               id: 'col_7', name: 'content', type: 'String', isPrimaryKey: false, isForeignKey: false, isNullable: true,
-              isUnique: undefined
+              isUnique: false
             },
             {
               id: 'col_8', name: 'authorId', type: 'Int', isPrimaryKey: false, isForeignKey: true, isNullable: false,
-              isUnique: undefined
+              isUnique: false
             }
           ],
-          name: ''
+          name: 'Post'
         }
       ]);
     }
@@ -147,7 +149,7 @@ export default function Home() {
           isPrimaryKey: true,
           isForeignKey: false,
           isNullable: false,
-          isUnique: undefined
+          isUnique: false
         }
       ]
     };
@@ -274,33 +276,7 @@ export default function Home() {
   };
 
   const exportSQL = () => {
-    let sql = `-- Database Schema: ${diagramName}\n`;
-    sql += `-- Generated: ${new Date().toISOString()}\n\n`;
-    
-    tables.forEach(table => {
-      sql += `CREATE TABLE ${table.name} (\n`;
-      sql += table.columns.map(col => {
-        let line = `  ${col.name} ${col.type === 'Int' ? 'INTEGER' : col.type === 'String' ? 'VARCHAR(255)' : col.type === 'DateTime' ? 'TIMESTAMP' : col.type === 'Boolean' ? 'BOOLEAN' : col.type}`;
-        if (col.isPrimaryKey) line += ' PRIMARY KEY';
-        if (!col.isNullable) line += ' NOT NULL';
-        if (col.defaultValue) line += ` DEFAULT ${col.defaultValue}`;
-        return line;
-      }).join(',\n');
-      sql += '\n);\n\n';
-    });
-
-    relationships.forEach(rel => {
-      const fromTable = tables.find(t => t.id === rel.fromTableId);
-      const toTable = tables.find(t => t.id === rel.toTableId);
-      const fromCol = fromTable?.columns.find(c => c.id === rel.fromColumnId);
-      const toCol = toTable?.columns.find(c => c.id === rel.toColumnId);
-      
-      if (fromTable && toTable && fromCol && toCol) {
-        sql += `ALTER TABLE ${fromTable.name}\n`;
-        sql += `  ADD FOREIGN KEY (${fromCol.name})\n`;
-        sql += `  REFERENCES ${toTable.name}(${toCol.name});\n\n`;
-      }
-    });
+    const sql = exportToSQL(tables, relationships, diagramName);
 
     const blob = new Blob([sql], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -505,132 +481,23 @@ export default function Home() {
     reader.onload = (event) => {
       const content = event.target?.result as string;
       try {
+        let result: { tables: Table[], relationships: Relationship[] } | null = null;
+
         if (file.name.endsWith('.sql')) {
-          // Basic SQL parsing
-          const lines = content.split('\n');
-          const newTables: Table[] = [];
-          let currentTable: Table | null = null;
-          let tableIndex = 0;
-
-          lines.forEach(line => {
-            const trimmed = line.trim();
-            
-            // Match CREATE TABLE
-            const createMatch = trimmed.match(/CREATE TABLE (\w+)/i);
-            if (createMatch) {
-              if (currentTable) newTables.push(currentTable);
-              currentTable = {
-                id: `table_${Date.now()}_${tableIndex++}`,
-                name: createMatch[1],
-                x: 100 + tableIndex * 350,
-                y: 100,
-                columns: []
-              };
-            }
-            
-            // Match columns
-            if (currentTable && trimmed.match(/^\w+\s+(INTEGER|VARCHAR|INT|TEXT|TIMESTAMP|BOOLEAN)/i)) {
-              const parts = trimmed.split(/\s+/);
-              const colName = parts[0].replace(/[,()]/g, '');
-              const colType = parts[1].replace(/[,()]/g, '');
-              const isPK = trimmed.toUpperCase().includes('PRIMARY KEY');
-              const isNullable = !trimmed.toUpperCase().includes('NOT NULL');
-              
-              currentTable.columns.push({
-                id: `col_${Date.now()}_${currentTable.columns.length}`,
-                name: colName,
-                type: colType === 'INTEGER' || colType === 'INT' ? 'Int' :
-                  colType === 'VARCHAR' || colType === 'TEXT' ? 'String' :
-                    colType === 'TIMESTAMP' ? 'DateTime' :
-                      colType === 'BOOLEAN' ? 'Boolean' : 'String',
-                isPrimaryKey: isPK,
-                isForeignKey: false,
-                isNullable: isNullable,
-                isUnique: undefined
-              });
-            }
-            
-            // End of table
-            if (trimmed.includes(');') && currentTable) {
-              newTables.push(currentTable);
-              currentTable = null;
-            }
-          });
-
-          if (currentTable) newTables.push(currentTable);
-          
-          if (newTables.length > 0) {
-            setTables(newTables);
-            alert(`Successfully imported ${newTables.length} table(s)`);
-          } else {
-            alert('No tables found in SQL file');
-          }
+          result = importFromSQL(content);
         } else if (file.name.endsWith('.prisma')) {
-          // Parse Prisma schema (use the existing parseCode logic from CodeEditor)
-          const lines = content.split('\n').filter(l => l.trim() && !l.trim().startsWith('//'));
-          const newTables: Table[] = [];
-          let currentTable: Table | null = null;
-          let tableIndex = 0;
-
-          lines.forEach(line => {
-            const trimmed = line.trim();
-            
-            if (trimmed.startsWith('generator ') || trimmed.startsWith('datasource ') || trimmed.startsWith('enum ')) {
-              return;
-            }
-            
-            if (trimmed.startsWith('model ')) {
-              if (currentTable) newTables.push(currentTable);
-              
-              const tableName = trimmed.split(' ')[1].replace('{', '').trim();
-              currentTable = {
-                id: `table_${Date.now()}_${tableIndex++}`,
-                name: tableName,
-                x: 100 + tableIndex * 350,
-                y: 100,
-                columns: []
-              };
-            } else if (trimmed === '}') {
-              if (currentTable) {
-                newTables.push(currentTable);
-                currentTable = null;
-              }
-            } else if (currentTable && !trimmed.includes('@relation')) {
-              const parts = trimmed.split(/\s+/);
-              if (parts.length >= 2) {
-                const colName = parts[0];
-                let colType = parts[1].replace('?', '').replace('[]', '');
-                const isNullable = parts[1].includes('?');
-                const isPrimaryKey = trimmed.includes('@id');
-                
-                const standardTypes = ['String', 'Int', 'Float', 'Boolean', 'DateTime', 'Json', 'Bytes', 'Decimal', 'BigInt'];
-                if (!standardTypes.includes(colType) && colType[0] === colType[0].toUpperCase()) {
-                  return;
-                }
-                
-                currentTable.columns.push({
-                  id: `col_${Date.now()}_${currentTable.columns.length}`,
-                  name: colName,
-                  type: colType,
-                  isPrimaryKey,
-                  isForeignKey: false,
-                  isNullable,
-                  isUnique: undefined
-                });
-              }
-            }
-          });
-
-          if (currentTable) newTables.push(currentTable);
-          
-          if (newTables.length > 0) {
-            setTables(newTables);
-            alert(`Successfully imported ${newTables.length} table(s)`);
-          } else {
-            alert('No tables found in Prisma file');
-          }
+          result = importFromPrisma(content);
         } else {
           alert('Unsupported file format. Please use .sql or .prisma files.');
+          return;
+        }
+
+        if (result.tables.length > 0) {
+          setTables(result.tables);
+          setRelationships(result.relationships);
+          alert(`Successfully imported ${result.tables.length} table(s)`);
+        } else {
+          alert('No tables found in file');
         }
       } catch (err) {
         alert('Error importing file: ' + (err instanceof Error ? err.message : String(err)));
@@ -897,7 +764,7 @@ export default function Home() {
               >
                 <ZoomOut size={16} />
               </button>
-              <span className={`text-sm font-medium min-w-[50px] text-center ${
+              <span className={`text-sm font-medium min-w-12.5 text-center ${
                 isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
                 {Math.round(zoom * 100)}%

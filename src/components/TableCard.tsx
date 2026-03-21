@@ -43,7 +43,7 @@ export const TableCard: React.FC<TableCardProps> = ({
       isPrimaryKey: false,
       isForeignKey: false,
       isNullable: true,
-      isUnique: undefined
+      isUnique: false
     };
 
     onUpdateTable({
